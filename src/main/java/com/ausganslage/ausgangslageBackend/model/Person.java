@@ -1,7 +1,6 @@
 package com.ausganslage.ausgangslageBackend.model;
-import com.fasterxml.jackson.annotation.JsonManagedReference;
+
 import jakarta.persistence.*;
-import java.util.List;
 
 @Entity
 public class Person {
@@ -11,10 +10,11 @@ public class Person {
 
     private String name;
 
-    // One person can have many todos
-    @OneToMany(mappedBy = "person", cascade = CascadeType.ALL, orphanRemoval = true)
-    @JsonManagedReference
-    private List<Todo> todos;
+    @Column(unique = true)
+    private String email;
+
+    // password hash (BCrypt)
+    private String passwordHash;
 
     // Getters & Setters
     public Long getId() { return id; }
@@ -23,6 +23,9 @@ public class Person {
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 
-    public List<Todo> getTodos() { return todos; }
-    public void setTodos(List<Todo> todos) { this.todos = todos; }
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+
+    public String getPasswordHash() { return passwordHash; }
+    public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
 }
