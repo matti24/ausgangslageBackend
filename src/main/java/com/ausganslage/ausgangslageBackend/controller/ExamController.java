@@ -7,11 +7,15 @@ import com.ausganslage.ausgangslageBackend.repository.ExamRepository;
 import com.ausganslage.ausgangslageBackend.repository.ResultRepository;
 import com.ausganslage.ausgangslageBackend.repository.EstimateRepository;
 import com.ausganslage.ausgangslageBackend.repository.PersonRepository;
+import com.ausganslage.ausgangslageBackend.exception.ResourceNotFoundException;
+import com.ausganslage.ausgangslageBackend.exception.InvalidOperationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 
 @RestController
 @RequestMapping("/api/exams")
@@ -35,10 +39,10 @@ public class ExamController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Exam> getExam(@PathVariable Long id) {
+    public ResponseEntity<Exam> getExam(@PathVariable Long id) throws ResourceNotFoundException {
         return examRepository.findById(id)
                 .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+                .orElseThrow(() -> new ResourceNotFoundException("Exam", id));
     }
 
     @PostMapping
@@ -48,20 +52,21 @@ public class ExamController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Exam> updateExam(@PathVariable Long id, @RequestBody Exam updatedExam) {
-        return examRepository.findById(id)
-                .map(exam -> {
-                    exam.setTitle(updatedExam.getTitle());
-                    exam.setDate(updatedExam.getDate());
-                    return ResponseEntity.ok(examRepository.save(exam));
-                })
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<Exam> updateExam(@PathVariable Long id, @RequestBody Exam updatedExam) 
+            throws ResourceNotFoundException {
+        Exam exam = examRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam", id));
+        
+        exam.setTitle(updatedExam.getTitle());
+        exam.setDate(updatedExam.getDate());
+        
+        return ResponseEntity.ok(examRepository.save(exam));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteExam(@PathVariable Long id) {
+    public ResponseEntity<?> deleteExam(@PathVariable Long id) throws ResourceNotFoundException {
         if (!examRepository.existsById(id)) {
-            return ResponseEntity.notFound().build();
+            throw new ResourceNotFoundException("Exam", id);
         }
         examRepository.deleteById(id);
         return ResponseEntity.ok().build();
@@ -69,14 +74,14 @@ public class ExamController {
 
     // Results endpoints
     @PostMapping("/{examId}/results")
-    public ResponseEntity<Result> addResult(@PathVariable Long examId, @RequestBody Result result) {
-        return examRepository.findById(examId)
-                .map(exam -> {
-                    result.setExam(exam);
-                    Result saved = resultRepository.save(result);
-                    return ResponseEntity.status(HttpStatus.CREATED).body(saved);
-                })
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<Result> addResult(@PathVariable Long examId, @RequestBody Result result) 
+            throws ResourceNotFoundException {
+        Exam exam = examRepository.findById(examId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam", examId));
+        
+        result.setExam(exam);
+        Result saved = resultRepository.save(result);
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
     @GetMapping("/{examId}/results")
@@ -91,46 +96,59 @@ public class ExamController {
     }
 
     @PostMapping("/{examId}/estimates")
-    public ResponseEntity<?> addEstimate(@PathVariable Long examId, @RequestBody EstimateRequest req) {
-        return examRepository.findById(examId)
-                .map(exam -> {
-                    // check person
-                    var maybePerson = personRepository.findById(req.personId);
-                    if (maybePerson.isEmpty()) return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Person not found");
+    public ResponseEntity<?> addEstimate(@PathVariable Long examId, @RequestBody EstimateRequest req) 
+            throws ResourceNotFoundException, InvalidOperationException {
+        
+        Exam exam = examRepository.findById(examId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exam", examId));
+        
+        var maybePerson = personRepository.findById(req.personId);
+        if (maybePerson.isEmpty()) {
+            throw new ResourceNotFoundException("Person", req.personId);
+        }
 
-                    // count existing estimates by this person for this exam
-                    var existing = estimateRepository.findByExamIdAndPersonId(examId, req.personId);
+        // Zähle existierende Schätzungen für diese Person und dieses Exam
+        var existing = estimateRepository.findByExamIdAndPersonId(examId, req.personId);
 
-                    java.time.LocalDate examDate;
-                    try {
-                        examDate = java.time.LocalDate.parse(exam.getDate());
-                    } catch (Exception e) {
-                        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid exam date format");
-                    }
-                    java.time.LocalDate today = java.time.LocalDate.now();
+        LocalDate examDate;
+        try {
+            examDate = LocalDate.parse(exam.getDate());
+        } catch (DateTimeParseException e) {
+            throw new InvalidOperationException("Ungültiges Datumsformat bei Exam", e);
+        }
+        
+        LocalDate today = LocalDate.now();
 
-                    if (existing.size() == 0) {
-                        // first estimate allowed only before exam date
-                        if (!today.isBefore(examDate)) {
-                            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("First estimate allowed only before exam date");
-                        }
-                    } else if (existing.size() == 1) {
-                        // second estimate allowed only after exam date
-                        if (!today.isAfter(examDate)) {
-                            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Second estimate allowed only after exam date");
-                        }
-                    } else {
-                        return ResponseEntity.status(HttpStatus.CONFLICT).body("Already submitted two estimates");
-                    }
+        try {
+            if (existing.size() == 0) {
+                // Erste Schätzung ist nur vor dem Exam-Datum erlaubt
+                if (!today.isBefore(examDate)) {
+                    throw new InvalidOperationException(
+                        "Erste Schätzung ist nur vor dem Exam-Datum (" + exam.getDate() + ") erlaubt");
+                }
+            } else if (existing.size() == 1) {
+                // Zweite Schätzung ist nur nach dem Exam-Datum erlaubt
+                if (!today.isAfter(examDate)) {
+                    throw new InvalidOperationException(
+                        "Zweite Schätzung ist nur nach dem Exam-Datum (" + exam.getDate() + ") erlaubt");
+                }
+            } else {
+                throw new InvalidOperationException(
+                    "Es wurden bereits zwei Schätzungen für dieses Exam abgegeben");
+            }
 
-                    Estimate estimate = new Estimate();
-                    estimate.setExam(exam);
-                    estimate.setPerson(maybePerson.get());
-                    estimate.setValue(req.value);
-                    Estimate saved = estimateRepository.save(estimate);
-                    return ResponseEntity.status(HttpStatus.CREATED).body(saved);
-                })
-                .orElse(ResponseEntity.notFound().build());
+            Estimate estimate = new Estimate();
+            estimate.setExam(exam);
+            estimate.setPerson(maybePerson.get());
+            estimate.setValue(req.value);
+            
+            Estimate saved = estimateRepository.save(estimate);
+            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+            
+        } finally {
+            // Cleanup/Logging für mögliche Fehlerbehandlung
+            // z.B. Audit-Log für gescheiterte Versuche
+        }
     }
 
     @GetMapping("/{examId}/estimates")

@@ -2,6 +2,9 @@ package com.ausganslage.ausgangslageBackend.controller;
 
 import com.ausganslage.ausgangslageBackend.model.Person;
 import com.ausganslage.ausgangslageBackend.repository.PersonRepository;
+import com.ausganslage.ausgangslageBackend.exception.AuthenticationException;
+import com.ausganslage.ausgangslageBackend.exception.DuplicateDataException;
+import com.ausganslage.ausgangslageBackend.exception.InvalidOperationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -32,38 +35,74 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody RegisterRequest req) {
-        if (req.email == null || req.password == null) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Email and password required");
+    public ResponseEntity<?> register(@RequestBody RegisterRequest req) 
+            throws InvalidOperationException, DuplicateDataException {
+        
+        // Try-Catch für Validierung mit aussagekräftigen Exceptions
+        try {
+            if (req.email == null || req.email.trim().isEmpty()) {
+                throw new InvalidOperationException("Email ist erforderlich");
+            }
+            if (req.password == null || req.password.trim().isEmpty()) {
+                throw new InvalidOperationException("Passwort ist erforderlich");
+            }
+            
+            // Prüfe ob Email bereits vorhanden ist
+            Optional<Person> exists = personRepository.findByEmail(req.email);
+            if (exists.isPresent()) {
+                throw new DuplicateDataException("Email", req.email);
+            }
+            
+            // Erstelle neuen Benutzer
+            Person p = new Person();
+            p.setName(req.name == null ? "" : req.name);
+            p.setEmail(req.email);
+            p.setPasswordHash(passwordEncoder.encode(req.password));
+            
+            personRepository.save(p);
+            return ResponseEntity.status(HttpStatus.CREATED).body(p);
+            
+        } finally {
+            // Cleanup: hier könnte z.B. temporäre Daten gelöscht werden
+            // oder Logging stattfinden
         }
-        Optional<Person> exists = personRepository.findByEmail(req.email);
-        if (exists.isPresent()) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body("Email already in use");
-        }
-        Person p = new Person();
-        p.setName(req.name == null ? "" : req.name);
-        p.setEmail(req.email);
-        p.setPasswordHash(passwordEncoder.encode(req.password));
-        personRepository.save(p);
-        return ResponseEntity.ok(p);
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest req) {
-        if (req.email == null || req.password == null) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Email and password required");
+    public ResponseEntity<?> login(@RequestBody LoginRequest req) 
+            throws InvalidOperationException, AuthenticationException {
+        
+        try {
+            if (req.email == null || req.email.trim().isEmpty()) {
+                throw new InvalidOperationException("Email ist erforderlich");
+            }
+            if (req.password == null || req.password.trim().isEmpty()) {
+                throw new InvalidOperationException("Passwort ist erforderlich");
+            }
+            
+            // Suche Benutzer nach Email
+            Optional<Person> maybe = personRepository.findByEmail(req.email);
+            if (maybe.isEmpty()) {
+                throw new AuthenticationException("Ungültige Email oder Passwort");
+            }
+            
+            Person p = maybe.get();
+            
+            // Validiere Passwort
+            if (!passwordEncoder.matches(req.password, p.getPasswordHash())) {
+                throw new AuthenticationException("Ungültige Email oder Passwort");
+            }
+            
+            // Gebe Benutzerinformation zurück (ohne Passwort)
+            Person out = new Person();
+            out.setId(p.getId());
+            out.setName(p.getName());
+            out.setEmail(p.getEmail());
+            
+            return ResponseEntity.ok(out);
+            
+        } finally {
+            // Cleanup: hier könnte z.B. Session-Logging stattfinden
         }
-        Optional<Person> maybe = personRepository.findByEmail(req.email);
-        if (maybe.isEmpty()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid credentials");
-        Person p = maybe.get();
-        if (!passwordEncoder.matches(req.password, p.getPasswordHash())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid credentials");
-        }
-        // Return basic user info (no password)
-        Person out = new Person();
-        out.setId(p.getId());
-        out.setName(p.getName());
-        out.setEmail(p.getEmail());
-        return ResponseEntity.ok(out);
     }
 }
